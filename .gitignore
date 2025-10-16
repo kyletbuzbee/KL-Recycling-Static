@@ -46,6 +46,3 @@ next-env.d.ts
 
 # Git lock files (in case they get committed accidentally)
 /.git**lock
-
-# Temporarily exclude large assets for initial commit
-/public/assets/
