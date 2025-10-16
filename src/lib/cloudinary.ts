@@ -1,0 +1,188 @@
+import { v2 as cloudinary } from "cloudinary";
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+export interface CloudinaryUploadResult {
+  public_id: string;
+  secure_url: string;
+  format: string;
+  width: number;
+  height: number;
+  bytes: number;
+  created_at: string;
+}
+
+// Upload file to Cloudinary (for server-side API routes)
+export const uploadToCloudinary = async (
+  filePathOrBuffer: string | Buffer,
+  folder = "kl-recycling/uploads",
+  options: {
+    transformation?: any[];
+    quality?: string | number;
+    format?: string;
+    width?: number;
+    height?: number;
+  } = {},
+): Promise<CloudinaryUploadResult> => {
+  return new Promise((resolve, reject) => {
+    const uploadOptions = {
+      folder,
+      resource_type: "auto",
+      quality: options.quality || "auto",
+      format: options.format || "auto",
+      transformation: options.transformation || [],
+      max_bytes: 10 * 1024 * 1024, // 10MB limit
+      ...options,
+    } as any; // Type assertion to bypass strict typing
+
+    cloudinary.uploader.upload(filePathOrBuffer as any, uploadOptions, (error, result) => {
+      if (error) {
+        reject(error);
+      } else if (result) {
+        resolve(result as CloudinaryUploadResult);
+      } else {
+        reject(new Error("Upload failed"));
+      }
+    });
+  });
+};
+
+// Delete file from Cloudinary
+export const deleteFromCloudinary = async (publicId: string): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader.destroy(publicId, (error, result) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve(result);
+      }
+    });
+  });
+};
+
+// Generate optimized URL for images
+export const getOptimizedImageUrl = (
+  publicId: string,
+  options: {
+    width?: number;
+    height?: number;
+    quality?: string | number;
+    format?: string;
+    crop?: string;
+    gravity?: string;
+    effect?: string;
+  } = {},
+): string => {
+  const { width, height, quality = "auto:best", format = "auto", crop = "fill", gravity, effect } = options;
+
+  const transformations = [
+    // Professional quality settings
+    { quality, dpr: "auto" },
+    // Enhanced visual settings for professional look
+    { saturation: 5 },
+    { contrast: 15 },
+    { brightness: 5 },
+    { sharpen: "a_10,r_10" },
+    { unsharp_mask: "30.0,1.0,1.0,0.05" },
+    // Format optimization
+    { fetch_format: format },
+    // Size and cropping
+    width && height ? { width, height, crop, gravity } : { width, height },
+    effect && { effect },
+  ].filter(Boolean);
+
+  return cloudinary.url(publicId, {
+    transformation: transformations,
+  });
+};
+
+// Upload multiple files
+export const uploadMultipleToCloudinary = async (
+  files: (string | Buffer)[],
+  folder = "kl-recycling/uploads",
+  options: {
+    transformation?: any[];
+    quality?: string | number;
+    format?: string;
+  } = {},
+): Promise<CloudinaryUploadResult[]> => {
+  const uploadPromises = files.map((file) => uploadToCloudinary(file, folder, options));
+  return Promise.all(uploadPromises);
+};
+
+// Validate file before upload
+export const validateFile = (file: { size: number; type: string }): { isValid: boolean; error?: string } => {
+  const maxSize = 10 * 1024 * 1024; // 10MB
+  const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "image/webp", "application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain"];
+
+  if (file.size > maxSize) {
+    return { isValid: false, error: "File size exceeds 10MB limit" };
+  }
+
+  if (!allowedTypes.includes(file.type)) {
+    return {
+      isValid: false,
+      error: "File type not supported. Please upload images (JPEG, PNG, WebP), PDF, DOC, DOCX, or TXT files.",
+    };
+  }
+
+  return { isValid: true };
+};
+
+// Next.js Image loader configuration for Cloudinary - Professional Quality
+export const cloudinaryLoader = ({ src, width, quality }: { src: string; width: number; quality?: number }): string => {
+  const professionalQuality = Math.max(quality || 100, 95); // Ensure minimum 95% quality
+
+  // If the src is already a full Cloudinary URL, transform it with professional settings
+  if (src.includes("cloudinary.com")) {
+    return src.replace("/upload/", `/upload/q_${professionalQuality},f_auto,dpr_auto,s_5,c_15,b_5,e_sharpen:10/e_sharpen:30.0:1.0:1.0:0.05/w_${width},c_limit/`);
+  }
+
+  // For local assets, construct Cloudinary URL with professional transformations
+  const publicId = src.startsWith("/") ? src.substring(1) : src;
+  const baseUrl = `https://res.cloudinary.com/${process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME}/image/upload`;
+
+  // Professional quality transformations: auto DPR, enhanced saturation/contrast/brightness, unsharp mask, auto format
+  return `${baseUrl}/q_${professionalQuality},f_auto,dpr_auto,s_5,c_15,b_5,e_sharpen:10,e_sharpen:30.0:1.0:1.0:0.05/w_${width},c_limit/${publicId}`;
+};
+
+// Configuration for Next.js Image component
+export const nextJsImageConfig = {
+  loader: cloudinaryLoader,
+  path: "",
+  unoptimized: false,
+};
+
+// Generate responsive srcSet for images
+export const getSrcSet = (src: string, widths: number[] = [320, 640, 768, 1024, 1280, 1920]): string => {
+  if (src.includes("cloudinary.com")) {
+    // Already Cloudinary URL - transform for each width
+    return widths.map((width) => `${src.replace("/upload/", `/upload/q_auto,f_webp,w_${width},c_limit/`)} ${width}w`).join(", ");
+  }
+
+  // Local asset - construct Cloudinary URLs
+  const publicId = src.startsWith("/") ? src.substring(1) : src;
+  const baseUrl = `https://res.cloudinary.com/${process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME}/image/upload`;
+
+  return widths.map((width) => `${baseUrl}/q_auto,f_webp,w_${width},c_limit/${publicId} ${width}w`).join(", ");
+};
+
+// Fallback image for lazy loading placeholders
+export const getPlaceholderSrc = (src: string, width: number = 32): string => {
+  if (src.includes("cloudinary.com")) {
+    return src.replace("/upload/", `/upload/q_auto,f_webp,w_${width},c_limit,e_blur:1000/`);
+  }
+
+  const publicId = src.startsWith("/") ? src.substring(1) : src;
+  const baseUrl = `https://res.cloudinary.com/${process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME}/image/upload`;
+
+  return `${baseUrl}/q_auto,f_webp,w_${width},c_limit,e_blur:1000/${publicId}`;
+};
+
+// Default export is required for Next.js custom loader
+export default cloudinaryLoader;
